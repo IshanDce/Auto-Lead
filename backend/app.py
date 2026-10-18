@@ -106,12 +106,8 @@ async def trigger_send(lead_id: int):
 
 @app.delete("/api/leads/{lead_id}")
 async def delete_lead(lead_id: int):
-    from .database import get_db
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
-    conn.commit()
-    conn.close()
+    from .database import delete_lead as db_delete_lead
+    db_delete_lead(lead_id)
     return {"status": "deleted"}
 
 @app.get("/api/settings")
@@ -126,6 +122,20 @@ async def update_settings(data: SettingsUpdate):
         set_setting(k, str(v))
     log_activity("SYSTEM", "Settings successfully updated by user.", "INFO")
     return {"status": "saved"}
+
+@app.post("/api/smtp/test")
+async def test_smtp_delivery(req: TestSMTPRequest):
+    if not req.test_email or "@" not in req.test_email:
+        raise HTTPException(status_code=400, detail="Please provide a valid test email address.")
+    test_lead = {
+        "id": 99999,
+        "business_name": "Test Recipient",
+        "contact_email": req.test_email.strip(),
+        "pitch_subject": "✅ AutoLead AI: SMTP Integration Verified!",
+        "pitch_body": "Hello!\n\nThis is a test email confirming that your SMTP integration with AutoLead AI is configured properly and actively delivering messages.\n\nBest regards,\nAutoLead AI Autonomous Engine"
+    }
+    success, msg = await send_cold_email(test_lead, is_test=True)
+    return {"success": success, "message": msg}
 
 @app.get("/api/logs")
 async def fetch_logs(limit: int = 60):
