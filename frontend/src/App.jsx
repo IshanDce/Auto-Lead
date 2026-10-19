@@ -24,10 +24,13 @@ import {
   Sliders,
   Play,
   Pause,
-  Layers
+  Layers,
+  Database,
+  Calendar
 } from 'lucide-react';
+import LeadOutreachRecord from './LeadOutreachRecord';
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8001';
 
 export default function App() {
   const [leads, setLeads] = useState([]);
@@ -54,6 +57,9 @@ export default function App() {
   const [editedBody, setEditedBody] = useState('');
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [currentView, setCurrentView] = useState('dashboard'); // 'dashboard' | 'record'
+  const [testEmailAddress, setTestEmailAddress] = useState('');
+  const [isTestingSMTP, setIsTestingSMTP] = useState(false);
 
   // Show Toast
   const showToast = (msg) => {
@@ -110,6 +116,24 @@ export default function App() {
       setEditedBody(selectedLead.pitch_body || '');
     }
   }, [selectedLead]);
+
+  // Lock window and document scrolling when viewing Records screen
+  useEffect(() => {
+    if (currentView === 'record') {
+      document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.height = '100vh';
+    } else {
+      document.body.style.overflow = 'auto';
+      document.documentElement.style.overflow = 'auto';
+      document.body.style.height = 'auto';
+    }
+    return () => {
+      document.body.style.overflow = 'auto';
+      document.documentElement.style.overflow = 'auto';
+      document.body.style.height = 'auto';
+    };
+  }, [currentView]);
 
   // Actions
   const handleTriggerCrawl = async () => {
@@ -237,6 +261,38 @@ export default function App() {
     }
   };
 
+  const handleSendTestEmail = async () => {
+    if (!testEmailAddress || !testEmailAddress.includes('@')) {
+      showToast('⚠️ Please enter a valid test email address');
+      return;
+    }
+    setIsTestingSMTP(true);
+    showToast('📨 Sending test email verification...');
+    try {
+      // First save current settings to backend
+      await fetch(`${API_BASE}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings })
+      });
+      const res = await fetch(`${API_BASE}/api/smtp/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test_email: testEmailAddress })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ Test email delivered successfully! Check your inbox.');
+      } else {
+        showToast('❌ SMTP Error: ' + (data.message || 'Delivery failed'));
+      }
+    } catch (e) {
+      showToast('❌ Network error: ' + e.message);
+    } finally {
+      setIsTestingSMTP(false);
+    }
+  };
+
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     showToast('Copied to clipboard: ' + text);
@@ -264,7 +320,18 @@ export default function App() {
   const isCrawlerActive = settings.crawler_active === 'true';
 
   return (
-    <div style={{ minHeight: '100vh', padding: '24px 32px', maxWidth: '1480px', margin: '0 auto' }}>
+    <div style={{
+      height: currentView === 'record' ? '100vh' : 'auto',
+      minHeight: '100vh',
+      maxHeight: currentView === 'record' ? '100vh' : 'none',
+      padding: currentView === 'record' ? '10px 16px' : '24px 32px',
+      maxWidth: currentView === 'record' ? '1680px' : '1600px',
+      margin: '0 auto',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: currentView === 'record' ? 'hidden' : 'visible',
+      boxSizing: 'border-box'
+    }}>
       
       {/* Toast Notification */}
       {toastMessage && (
@@ -290,6 +357,91 @@ export default function App() {
         </div>
       )}
 
+      {/* Top navigation shown only in Dashboard view */}
+      {currentView === 'dashboard' && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '10px',
+          marginBottom: '20px',
+          paddingBottom: '14px',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          flexShrink: 0
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: 'var(--primary)',
+              boxShadow: '0 0 10px var(--primary)'
+            }}></div>
+            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#f8fafc' }}>
+              AutoLead AI Engine • Realtime Dashboard
+            </span>
+          </div>
+
+          {/* Top-Right Corner: 2 Options (Dashboard & Record) */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: 'rgba(15, 23, 42, 0.95)',
+            padding: '4px',
+            borderRadius: '12px',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+          }}>
+            <button
+              onClick={() => setCurrentView('dashboard')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 18px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                color: '#ffffff',
+                fontWeight: 700,
+                fontSize: '0.86rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                boxShadow: '0 2px 10px rgba(99, 102, 241, 0.45)'
+              }}
+            >
+              <Layers size={15} />
+              <span>Dashboard</span>
+            </button>
+            <button
+              onClick={() => setCurrentView('record')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 18px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'transparent',
+                color: '#94a3b8',
+                fontWeight: 500,
+                fontSize: '0.86rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
+              }}
+            >
+              <Calendar size={15} />
+              <span>Record</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {currentView === 'record' ? (
+        <LeadOutreachRecord leads={leads} currentView={currentView} setCurrentView={setCurrentView} />
+      ) : (
+        <>
       {/* TOP HEADER */}
       <header style={{
         display: 'flex',
@@ -318,6 +470,11 @@ export default function App() {
               <span className="badge" style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
                 v2.5 Autonomous
               </span>
+              {metrics.database_mode && (
+                <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <Database size={11} /> {metrics.database_mode}
+                </span>
+              )}
             </div>
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
               24/7 Continuous Web & App Development Lead Crawler with Autonomous Cold Outreach
@@ -768,6 +925,8 @@ export default function App() {
           })}
         </div>
       )}
+        </>
+      )}
 
       {/* LEAD AUDIT & AI PITCH MODAL */}
       {selectedLead && (
@@ -980,7 +1139,7 @@ export default function App() {
               {/* Gmail / SMTP Settings */}
               <div>
                 <h4 style={{ fontSize: '0.86rem', color: '#38bdf8', marginBottom: '10px', textTransform: 'uppercase' }}>
-                  Gmail / Google Workspace SMTP Credentials
+                  Email Delivery &amp; SMTP Credentials (Gmail, SendGrid, Brevo, Custom SMTP)
                 </h4>
                 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
@@ -1003,29 +1162,84 @@ export default function App() {
                   </div>
                 </div>
 
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>SMTP Host Server</label>
+                    <input
+                      type="text"
+                      placeholder="smtp.gmail.com"
+                      value={settings.smtp_host || 'smtp.gmail.com'}
+                      onChange={e => setSettings({ ...settings, smtp_host: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>SMTP Port</label>
+                    <input
+                      type="text"
+                      placeholder="587"
+                      value={settings.smtp_port || '587'}
+                      onChange={e => setSettings({ ...settings, smtp_port: e.target.value })}
+                    />
+                  </div>
+                </div>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                   <div>
-                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Gmail Address</label>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Sender Email / Username</label>
                     <input
-                      type="email"
-                      placeholder="youremail@gmail.com"
+                      type="text"
+                      placeholder="youremail@gmail.com or api_user"
                       value={settings.smtp_user || ''}
                       onChange={e => setSettings({ ...settings, smtp_user: e.target.value })}
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Gmail App Password (16-char)</label>
+                    <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>Password / App Password / API Key</label>
                     <input
                       type="password"
-                      placeholder="abcd efgh ijkl mnop"
+                      placeholder="16-char App Password or API Key"
                       value={settings.smtp_pass || ''}
                       onChange={e => setSettings({ ...settings, smtp_pass: e.target.value })}
                     />
                   </div>
                 </div>
 
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', background: 'rgba(0,0,0,0.2)', padding: '8px 12px', borderRadius: '8px' }}>
-                  💡 <strong>Tip for Gmail:</strong> Go to Google Account &gt; Security &gt; 2-Step Verification &gt; App Passwords. Generate an App Password for "Mail" and paste it above!
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', background: 'rgba(0,0,0,0.2)', padding: '8px 12px', borderRadius: '8px', marginBottom: '12px' }}>
+                  💡 <strong>Gmail Guide:</strong> Go to Google Account &gt; Security &gt; 2-Step Verification &gt; App Passwords. Generate an App Password for &quot;Mail&quot; and paste it above!
+                </div>
+
+                {/* Test Email Verification Box */}
+                <div style={{
+                  padding: '12px',
+                  borderRadius: '10px',
+                  background: 'rgba(99, 102, 241, 0.08)',
+                  border: '1px solid rgba(99, 102, 241, 0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px'
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f8fafc', marginBottom: '4px' }}>
+                      Verify Credentials (Send Test Email)
+                    </div>
+                    <input
+                      type="email"
+                      placeholder="Enter your personal email to verify..."
+                      value={testEmailAddress}
+                      onChange={e => setTestEmailAddress(e.target.value)}
+                      style={{ padding: '6px 10px', fontSize: '0.8rem', width: '100%' }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleSendTestEmail}
+                    disabled={isTestingSMTP}
+                    className="btn btn-secondary"
+                    style={{ padding: '8px 16px', fontSize: '0.8rem', alignSelf: 'flex-end', whiteSpace: 'nowrap' }}
+                  >
+                    {isTestingSMTP ? 'Sending...' : '📨 Send Test'}
+                  </button>
                 </div>
               </div>
 

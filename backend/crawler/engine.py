@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from ..database import (
-    get_setting, log_activity, get_leads, update_lead, get_db
+    get_setting, log_activity, get_leads, update_lead, get_leads_needing_pitch
 )
 from .local_businesses import crawl_local_niche
 from .job_boards import crawl_job_boards
@@ -23,11 +23,7 @@ async def process_autonomous_pipeline():
     autonomous_on = get_setting("autonomous_mode", "true").lower() == "true"
     
     # Fetch leads that need pitch generation
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM leads WHERE pitch_body IS NULL OR pitch_body = '' LIMIT 15")
-    rows = cursor.fetchall()
-    conn.close()
+    rows = get_leads_needing_pitch(limit=15)
 
     for r in rows:
         lead = dict(r)

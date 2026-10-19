@@ -2,14 +2,14 @@ import aiosmtplib
 from email.message import EmailMessage
 from datetime import datetime
 from typing import Dict, Any, Tuple
-from ..database import get_setting, log_activity, update_lead, get_db
+from ..database import get_setting, log_activity, update_lead, get_daily_sent_count
 
-async def send_cold_email(lead: Dict[str, Any]) -> Tuple[bool, str]:
+async def send_cold_email(lead: Dict[str, Any], is_test: bool = False) -> Tuple[bool, str]:
     """
     Sends an autonomous cold email to the target lead via Gmail / SMTP.
     If simulation mode is active or credentials are empty, simulates success safely.
     """
-    lead_id = lead["id"]
+    lead_id = lead.get("id", 0)
     to_email = lead.get("contact_email", "").strip()
     subject = lead.get("pitch_subject", "").strip()
     body = lead.get("pitch_body", "").strip()
@@ -17,7 +17,8 @@ async def send_cold_email(lead: Dict[str, Any]) -> Tuple[bool, str]:
 
     if not to_email:
         err = "Cannot send email: Lead has no valid contact email address."
-        update_lead(lead_id, {"status": "FAILED", "error_message": err})
+        if not is_test:
+            update_lead(lead_id, {"status": "FAILED", "error_message": err})
         log_activity("EMAIL_SENDER", f"Skipped lead #{lead_id} ({biz_name}): No email address found.", "WARNING")
         return False, err
 
@@ -28,18 +29,15 @@ async def send_cold_email(lead: Dict[str, Any]) -> Tuple[bool, str]:
     from_name = get_setting("from_name", "Solutions Architect").strip()
     simulation_mode = get_setting("simulation_mode", "false").lower() == "true"
 
-    # Check daily quota
-    daily_limit = int(get_setting("daily_send_limit", "30"))
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'SENT' AND date(sent_at) = date('now')")
-    today_sent = cursor.fetchone()[0]
-    conn.close()
+    # Check daily quota (skip for explicit test emails)
+    if not is_test:
+        daily_limit = int(get_setting("daily_send_limit", "30"))
+        today_sent = get_daily_sent_count()
 
-    if today_sent >= daily_limit:
-        msg = f"Daily send limit of {daily_limit} emails reached. Pausing autonomous send until tomorrow."
-        log_activity("EMAIL_SENDER", msg, "WARNING")
-        return False, msg
+        if today_sent >= daily_limit:
+            msg = f"Daily send limit of {daily_limit} emails reached. Pausing autonomous send until tomorrow."
+            log_activity("EMAIL_SENDER", msg, "WARNING")
+            return False, msg
 
     # If simulation mode is active OR no SMTP credentials yet configured:
     if simulation_mode or not smtp_user or not smtp_pass:
@@ -72,19 +70,21 @@ async def send_cold_email(lead: Dict[str, Any]) -> Tuple[bool, str]:
         )
 
         now = datetime.utcnow().isoformat()
-        update_lead(lead_id, {
-            "status": "SENT",
-            "sent_at": now,
-            "error_message": None
-        })
+        if not is_test:
+            update_lead(lead_id, {
+                "status": "SENT",
+                "sent_at": now,
+                "error_message": None
+            })
         log_activity("EMAIL_SENDER", f"Live Email SENT successfully to {to_email} ({biz_name})!", "SUCCESS")
         return True, "Email sent successfully"
 
     except Exception as e:
         err_msg = str(e)
-        update_lead(lead_id, {
-            "status": "FAILED",
-            "error_message": err_msg
-        })
+        if not is_test:
+            update_lead(lead_id, {
+                "status": "FAILED",
+                "error_message": err_msg
+            })
         log_activity("EMAIL_SENDER", f"SMTP delivery failed for {to_email}: {err_msg}", "ERROR")
         return False, err_msg
