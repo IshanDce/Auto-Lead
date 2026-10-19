@@ -22,13 +22,26 @@ def generate_heuristic_pitch(lead: Dict[str, Any]) -> Tuple[str, str]:
     flags = analysis.get("audit_flags", [])
     load_speed = analysis.get("load_speed_ms", 1200)
     has_app = analysis.get("has_mobile_app", False)
+    import random
     from_name = get_setting("from_name", DEFAULT_SENDER_NAME)
 
     if category == "App Development":
-        subject = f"Mobile app concept for {biz_name} (iOS & Android booking)"
-        body = f"""Hi {biz_name} team,
+        app_subjects = [
+            f"Quick thought regarding a mobile app for {biz_name}",
+            f"Mobile booking app concept for {biz_name} (iOS & Android)",
+            f"Idea for {biz_name}'s mobile clients",
+            f"{biz_name} - instant mobile client booking concept"
+        ]
+        subject = random.choice(app_subjects)
 
-I came across your business while reviewing top services in your market. Your offerings are fantastic, but I noticed you currently don't have a dedicated iOS & Android mobile application for your clients to book appointments and receive push notifications directly.
+        openers = [
+            f"Hi {biz_name} team,\n\nI came across your business while reviewing top services in your market.",
+            f"Hello {biz_name},\n\nHope you're having a productive week. Loved checking out your current offerings.",
+            f"Hi there,\n\nI was looking through your online presence at {biz_name} earlier today."
+        ]
+        opener = random.choice(openers)
+
+        body = f"""{opener} Your offerings are fantastic, but I noticed you currently don't have a dedicated iOS & Android mobile application for your clients to book appointments and receive push notifications directly.
 
 Over 72% of modern customers prefer 1-tap bookings and mobile loyalty perks rather than opening a browser. We recently built a cross-platform mobile app for a similar business that increased repeat customer bookings by 38% within 60 days.
 
@@ -37,23 +50,37 @@ We took the liberty of mapping out a quick 3-screen interactive prototype for {b
 2. Real-Time Push Notifications for Reminders & Offers
 3. Integrated Apple Pay & Google Pay checkout
 
-Would you be open to a quick 5-minute Loom demo or a quick walkthrough this Thursday to see how it looks?
+Would you be open to a quick 5-minute Loom demo or a quick walkthrough this week to see how it looks?
 
 Best regards,
 
 {from_name}
 Mobile & Web Engineering Lead
-P.S. If you're not the right person to review digital growth for {biz_name}, could you kindly point me in the right direction?"""
+
+---
+If you prefer not to receive updates from us, reply with 'unsubscribe' and we will promptly remove you."""
 
     else:
         # Website Redesign & Modern Web Platform
         speed_note = f"takes approximately {load_speed}ms to load" if load_speed > 2000 else "could benefit from a modern Next.js/React architecture"
         flaw_note = f"specifically: {flags[0]}" if flags else "improving conversion rate and mobile UX"
 
-        subject = f"Quick question regarding {biz_name}'s website conversion"
-        body = f"""Hi {biz_name} team,
+        web_subjects = [
+            f"Quick question regarding {biz_name}'s website conversion",
+            f"Mobile performance observation for {biz_name}",
+            f"Note regarding {biz_name}'s web conversion rate",
+            f"Speed & mobile UX concept for {biz_name}"
+        ]
+        subject = random.choice(web_subjects)
 
-I was looking through your online presence at {biz_name}. Your brand reputation is strong, but reviewing the site on mobile, I noticed a few technical bottlenecks ({flaw_note}, and the page {speed_note}).
+        openers = [
+            f"Hi {biz_name} team,\n\nI was looking through your online presence at {biz_name}.",
+            f"Hello {biz_name},\n\nHope all is well. I was reviewing local services and came across your website.",
+            f"Hi there,\n\nI recently analyzed your web performance over at {biz_name}."
+        ]
+        opener = random.choice(openers)
+
+        body = f"""{opener} Your brand reputation is strong, but reviewing the site on mobile, I noticed a few technical bottlenecks ({flaw_note}, and the page {speed_note}).
 
 In today's competitive landscape, slow load times and non-optimized mobile navigation can lead to upwards of 40% bounce rate from potential high-intent clients before they reach your contact form.
 
@@ -67,19 +94,27 @@ Warmly,
 
 {from_name}
 Full-Stack Web Architect
-P.S. If you are not handling website updates for {biz_name}, no problem at all! Feel free to forward this to your marketing/tech lead."""
+
+---
+If you prefer not to receive updates from us, reply with 'unsubscribe' and we will promptly remove you."""
 
     return subject, body
+
+_gemini_quota_paused_until = 0
 
 async def generate_ai_pitch(lead: Dict[str, Any]) -> Tuple[str, str]:
     """
     Generates a personalized email pitch using Google Gemini if API key is configured,
     or falls back seamlessly to the high-converting heuristic pitch engine.
     """
+    global _gemini_quota_paused_until
+    now = time.time()
+    if now < _gemini_quota_paused_until:
+        return generate_heuristic_pitch(lead)
+
     gemini_key = get_setting("gemini_api_key", "").strip() or os.environ.get("GEMINI_API_KEY", "")
 
     if not gemini_key:
-        # Use our built-in high-converting pitch engine
         return generate_heuristic_pitch(lead)
 
     try:
@@ -128,5 +163,10 @@ Rules:
         return data.get("subject", ""), data.get("body", "")
 
     except Exception as e:
-        log_activity("AI_PITCH", f"Gemini API generation error: {e}. Falling back to heuristic pitch.", "WARNING")
+        err_str = str(e)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+            _gemini_quota_paused_until = time.time() + 3600
+            log_activity("AI_PITCH", "Gemini free daily quota reached. Seamlessly switching to built-in high-converting pitch engine (zero delay).", "INFO")
+        else:
+            log_activity("AI_PITCH", f"Gemini API generation error: {e}. Falling back to heuristic pitch.", "WARNING")
         return generate_heuristic_pitch(lead)

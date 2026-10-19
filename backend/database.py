@@ -83,11 +83,11 @@ def init_db():
                 "autonomous_mode": "true",
                 "crawler_active": "true",
                 "crawl_interval_minutes": "10",
-                "smtp_host": "smtp.gmail.com",
-                "smtp_port": "587",
-                "smtp_user": "",
-                "smtp_pass": "",
-                "from_name": "Senior Solutions Architect",
+                "smtp_host": os.environ.get("SMTP_HOST", "smtp.gmail.com"),
+                "smtp_port": os.environ.get("SMTP_PORT", "587"),
+                "smtp_user": os.environ.get("SMTP_USER", ""),
+                "smtp_pass": os.environ.get("SMTP_PASS", ""),
+                "from_name": os.environ.get("FROM_NAME", "NexBharat"),
                 "daily_send_limit": "30",
                 "gemini_api_key": os.environ.get("GEMINI_API_KEY", ""),
                 "simulation_mode": "false",
@@ -214,6 +214,11 @@ def get_setting(key: str, default: str = "") -> str:
     if mdb is not None:
         try:
             doc = mdb.settings.find_one({"_id": key})
+            if doc and "value" in doc and doc["value"] != "":
+                return str(doc["value"])
+            env_val = os.environ.get(key.upper()) or os.environ.get(key)
+            if env_val:
+                return str(env_val)
             if doc and "value" in doc:
                 return str(doc["value"])
             return default
@@ -225,6 +230,11 @@ def get_setting(key: str, default: str = "") -> str:
     cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = cursor.fetchone()
     conn.close()
+    if row and row["value"]:
+        return row["value"]
+    env_val = os.environ.get(key.upper()) or os.environ.get(key)
+    if env_val:
+        return str(env_val)
     return row["value"] if row else default
 
 def set_setting(key: str, value: str):
@@ -243,20 +253,35 @@ def set_setting(key: str, value: str):
     conn.close()
 
 def get_all_settings() -> Dict[str, str]:
+    settings = {}
     mdb = get_mongo_db()
     if mdb is not None:
         try:
             docs = list(mdb.settings.find({}))
-            return {d["_id"]: d.get("value", "") for d in docs}
+            settings = {d["_id"]: d.get("value", "") for d in docs}
         except Exception as e:
             print(f"Mongo get_all_settings error: {e}")
+    else:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM settings")
+        rows = cursor.fetchall()
+        conn.close()
+        settings = {r["key"]: r["value"] for r in rows}
 
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT key, value FROM settings")
-    rows = cursor.fetchall()
-    conn.close()
-    return {r["key"]: r["value"] for r in rows}
+    env_map = {
+        "smtp_host": "SMTP_HOST",
+        "smtp_port": "SMTP_PORT",
+        "smtp_user": "SMTP_USER",
+        "smtp_pass": "SMTP_PASS",
+        "from_name": "FROM_NAME",
+        "gemini_api_key": "GEMINI_API_KEY",
+    }
+    for k, env_var in env_map.items():
+        if not settings.get(k) and os.environ.get(env_var):
+            settings[k] = os.environ[env_var]
+
+    return settings
 
 from urllib.parse import urlparse
 
@@ -685,5 +710,40 @@ def get_leads_needing_pitch(limit: int = 15) -> List[Dict[str, Any]]:
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+def get_leads_ready_for_outreach(limit: int = 10) -> List[Dict[str, Any]]:
+    mdb = get_mongo_db()
+    if mdb is not None:
+        try:
+            docs = list(mdb.leads.find({
+                "status": {"$in": ["DRAFTED", "ANALYZED"]},
+                "pitch_body": {"$exists": True, "$ne": ""},
+                "contact_email": {"$exists": True, "$ne": ""}
+            }, {"_id": 0}).sort("id", -1).limit(limit))
+            return docs
+        except Exception as e:
+            print(f"Mongo get_leads_ready_for_outreach error: {e}")
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM leads 
+        WHERE status IN ('DRAFTED', 'ANALYZED') 
+          AND pitch_body IS NOT NULL AND pitch_body != '' 
+          AND contact_email IS NOT NULL AND contact_email != ''
+        ORDER BY id DESC LIMIT ?
+    """, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d.get("website_analysis") and isinstance(d["website_analysis"], str):
+            try:
+                d["website_analysis"] = json.loads(d["website_analysis"])
+            except Exception:
+                pass
+        result.append(d)
+    return result
 
 init_db()

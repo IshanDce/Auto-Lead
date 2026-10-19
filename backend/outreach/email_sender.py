@@ -15,11 +15,12 @@ async def send_cold_email(lead: Dict[str, Any], is_test: bool = False) -> Tuple[
     body = lead.get("pitch_body", "").strip()
     biz_name = lead.get("business_name", "Lead")
 
-    if not to_email:
-        err = "Cannot send email: Lead has no valid contact email address."
+    from ..crawler.website_analyzer import is_valid_email
+    if not to_email or not is_valid_email(to_email):
+        err = f"Blocked: Invalid recipient email address '{to_email}'."
         if not is_test:
             update_lead(lead_id, {"status": "FAILED", "error_message": err})
-        log_activity("EMAIL_SENDER", f"Skipped lead #{lead_id} ({biz_name}): No email address found.", "WARNING")
+        log_activity("EMAIL_SENDER", f"Skipped lead #{lead_id} ({biz_name}): Invalid email address '{to_email}'.", "WARNING")
         return False, err
 
     smtp_user = get_setting("smtp_user", "").strip()
@@ -52,10 +53,15 @@ async def send_cold_email(lead: Dict[str, Any], is_test: bool = False) -> Tuple[
 
     # Real SMTP Delivery via Gmail / Custom SMTP
     try:
+        from email.utils import make_msgid, formatdate
         msg = EmailMessage()
         msg["From"] = f"{from_name} <{smtp_user}>"
         msg["To"] = to_email
         msg["Subject"] = subject
+        msg["Date"] = formatdate(localtime=True)
+        msg["Message-ID"] = make_msgid(domain=smtp_user.split("@")[-1] if "@" in smtp_user else "gmail.com")
+        msg["Reply-To"] = smtp_user
+        msg["X-Mailer"] = "AutoLead Engine v2.0"
         msg.set_content(body)
 
         # Connect with STARTTLS
@@ -81,6 +87,12 @@ async def send_cold_email(lead: Dict[str, Any], is_test: bool = False) -> Tuple[
 
     except Exception as e:
         err_msg = str(e)
+        # Check if Gmail daily quota / cooldown was triggered
+        if "550" in err_msg or "Daily user sending limit" in err_msg:
+            from ..database import set_setting
+            set_setting("simulation_mode", "true")
+            log_activity("EMAIL_SENDER", f"Gmail Daily Sending Limit Exceeded (550). Auto-switched to Simulation Mode to safeguard your account: {err_msg}", "WARNING")
+
         if not is_test:
             update_lead(lead_id, {
                 "status": "FAILED",
