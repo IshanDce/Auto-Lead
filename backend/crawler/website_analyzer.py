@@ -5,25 +5,80 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from typing import Dict, Any, List, Optional
 
-EMAIL_REGEX = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+')
+# Strict email regex requiring alphabetic TLD of 2-15 letters
+EMAIL_REGEX = re.compile(r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,15}\b')
 PHONE_REGEX = re.compile(r'(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}')
 
-# Common false positive emails to filter out
-IGNORE_EMAILS = {
-    'example.com', 'domain.com', 'yourname@', 'test@test.com', 'email@example.com',
-    'sentry.io', 'wixpress.com', 'wordpress.org', 'schema.org'
+DISALLOWED_DOMAINS = {
+    'example.com', 'domain.com', 'test.com', 'sentry.io', 'wixpress.com', 
+    'wordpress.org', 'schema.org', 'github.com', 'googleapis.com', 
+    'google.com', 'facebook.com', 'instagram.com', 'twitter.com', 'x.com'
 }
 
-def clean_email(email: str) -> Optional[str]:
+DISALLOWED_PREFIXES = {
+    'bootstrap', 'handlebars', 'axe-core', 'axe', 'validatorjs', 'swiper', 
+    'wght', 'react', 'vue', 'angular', 'webpack', 'core-js', 'lodash', 
+    'jquery', 'npm', 'node', 'yarn', 'github', 'sentry', 'wixpress', 
+    'schema', 'example', 'yourname', 'test', 'email', 'javascript-tracker',
+    'intl-messageformat'
+}
+
+ASSET_EXTENSIONS = (
+    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp', 
+    '.js', '.css', '.map', '.json', '.woff', '.woff2', '.ttf', '.eot'
+)
+
+def is_valid_email(email: str) -> bool:
+    if not email or not isinstance(email, str):
+        return False
     email = email.strip().lower()
-    if any(ignore in email for ignore in IGNORE_EMAILS):
+    
+    # Must match strict regex
+    if not EMAIL_REGEX.fullmatch(email):
+        return False
+        
+    if len(email) < 6 or len(email) > 60:
+        return False
+        
+    if any(email.endswith(ext) for ext in ASSET_EXTENSIONS):
+        return False
+        
+    parts = email.split('@')
+    if len(parts) != 2:
+        return False
+        
+    local, domain = parts
+    
+    # Disallow known framework, tool or package prefixes
+    if any(local == p or local.startswith(p + '@') or local.startswith(p + '-') or local.startswith(p + '.') for p in DISALLOWED_PREFIXES):
+        return False
+
+    # Disallow internal dummy domains
+    if domain in DISALLOWED_DOMAINS or any(domain.endswith('.' + d) for d in DISALLOWED_DOMAINS):
+        return False
+        
+    domain_parts = domain.split('.')
+    tld = domain_parts[-1]
+    if not tld.isalpha() or len(tld) < 2:
+        return False
+        
+    # Any domain part being purely numeric is invalid (like version numbers 1.1.2)
+    if any(p.isdigit() for p in domain_parts):
+        return False
+        
+    # Reject consecutive dots or leading/trailing dots/dashes
+    if '..' in email or local.startswith('.') or local.endswith('.') or domain.startswith('.') or domain.endswith('.'):
+        return False
+        
+    return True
+
+def clean_email(email: str) -> Optional[str]:
+    if not email:
         return None
-    # Filter image extensions falsely captured as email
-    if email.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):
-        return None
-    if len(email) > 60 or len(email) < 6:
-        return None
-    return email
+    cleaned = email.strip().lower().strip('<>"\';:,()[]{}')
+    if is_valid_email(cleaned):
+        return cleaned
+    return None
 
 async def analyze_website(url: str, session: aiohttp.ClientSession) -> Dict[str, Any]:
     """
@@ -147,18 +202,24 @@ async def analyze_website(url: str, session: aiohttp.ClientSession) -> Dict[str,
     phones = set()
 
     for mailto in soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
-        addr = mailto["href"].replace("mailto:", "").split("?")[0].strip()
+        addr = mailto.get("href", "").replace("mailto:", "").split("?")[0].strip()
         cleaned = clean_email(addr)
         if cleaned:
             emails.add(cleaned)
 
-    # Regex search on homepage
-    for m in EMAIL_REGEX.findall(html):
+    # Clean text: strip script, style, code, svg so JS packages/webpack bundles aren't extracted as emails
+    text_soup = BeautifulSoup(html, "html.parser")
+    for tag in text_soup(["script", "style", "noscript", "svg", "iframe", "code"]):
+        tag.decompose()
+    clean_page_text = text_soup.get_text(separator=" ")
+
+    # Regex search on cleaned visible text
+    for m in EMAIL_REGEX.findall(clean_page_text):
         cleaned = clean_email(m)
         if cleaned:
             emails.add(cleaned)
 
-    for p in PHONE_REGEX.findall(html):
+    for p in PHONE_REGEX.findall(clean_page_text):
         if len(p) >= 10:
             phones.add(p.strip())
 
@@ -179,11 +240,14 @@ async def analyze_website(url: str, session: aiohttp.ClientSession) -> Dict[str,
                         c_html = await c_resp.text(errors="ignore")
                         c_soup = BeautifulSoup(c_html, "html.parser")
                         for mailto in c_soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
-                            addr = mailto["href"].replace("mailto:", "").split("?")[0].strip()
+                            addr = mailto.get("href", "").replace("mailto:", "").split("?")[0].strip()
                             cleaned = clean_email(addr)
                             if cleaned:
                                 emails.add(cleaned)
-                        for m in EMAIL_REGEX.findall(c_html):
+                        for tag in c_soup(["script", "style", "noscript", "svg", "iframe", "code"]):
+                            tag.decompose()
+                        c_text = c_soup.get_text(separator=" ")
+                        for m in EMAIL_REGEX.findall(c_text):
                             cleaned = clean_email(m)
                             if cleaned:
                                 emails.add(cleaned)

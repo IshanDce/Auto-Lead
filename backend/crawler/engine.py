@@ -5,10 +5,12 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from ..database import (
-    get_setting, log_activity, get_leads, update_lead, get_leads_needing_pitch
+    get_setting, log_activity, get_leads, update_lead, 
+    get_leads_needing_pitch, get_leads_ready_for_outreach, get_daily_sent_count
 )
 from .local_businesses import crawl_local_niche
 from .job_boards import crawl_job_boards
+from .website_analyzer import is_valid_email
 from ..ai.pitch_generator import generate_ai_pitch
 from ..outreach.email_sender import send_cold_email
 
@@ -17,14 +19,13 @@ _is_running = False
 
 async def process_autonomous_pipeline():
     """
-    Looks for newly discovered/analyzed leads, creates AI pitches,
-    and if autonomous mode is ON, automatically shoots the cold email.
+    1. Looks for newly discovered/analyzed leads and creates AI pitches (DRAFTED).
+    2. If autonomous mode is ON, automatically dispatches valid cold emails to pending leads.
     """
     autonomous_on = get_setting("autonomous_mode", "true").lower() == "true"
     
-    # Fetch leads that need pitch generation
+    # 1. Generate AI pitches for unpitched leads
     rows = get_leads_needing_pitch(limit=15)
-
     for r in rows:
         lead = dict(r)
         lead_id = lead["id"]
@@ -33,21 +34,48 @@ async def process_autonomous_pipeline():
             update_lead(lead_id, {
                 "pitch_subject": subject,
                 "pitch_body": body,
-                "status": "DRAFTED" if lead["status"] in ["DISCOVERED", "ANALYZED"] else lead["status"]
+                "status": "DRAFTED"
             })
             lead["pitch_subject"] = subject
             lead["pitch_body"] = body
             log_activity("AI_PITCH", f"Generated customized pitch for '{lead.get('business_name')}': '{subject}'", "INFO")
-
-            # If 100% Autonomous mode is active and lead has email, dispatch email immediately!
-            if autonomous_on and lead.get("contact_email") and lead.get("status") != "SENT":
-                log_activity("EMAIL_SENDER", f"Auto-Pilot Active: Shooting automated cold email to {lead['contact_email']}...", "INFO")
-                await send_cold_email(lead)
-                # Anti-spam delay between autonomous emails
-                await asyncio.sleep(random.uniform(4.0, 8.0))
-
         except Exception as e:
             log_activity("AI_PITCH", f"Error generating pitch for lead #{lead_id}: {e}", "ERROR")
+
+    # 2. If Autonomous mode is active, dispatch pending ready leads
+    if autonomous_on:
+        daily_limit = int(get_setting("daily_send_limit", "30"))
+        today_sent = get_daily_sent_count()
+
+        if today_sent >= daily_limit:
+            log_activity("EMAIL_SENDER", f"Daily send quota reached ({today_sent}/{daily_limit}). Autonomous sending paused until tomorrow.", "WARNING")
+            return
+
+        ready_leads = get_leads_ready_for_outreach(limit=10)
+        for lead in ready_leads:
+            lead_id = lead["id"]
+            to_email = lead.get("contact_email", "").strip()
+
+            if not to_email or not is_valid_email(to_email):
+                update_lead(lead_id, {
+                    "status": "FAILED",
+                    "error_message": f"Blocked: Invalid recipient address format '{to_email}'"
+                })
+                continue
+
+            if today_sent >= daily_limit:
+                break
+
+            biz_name = lead.get("business_name", "Lead")
+            log_activity("EMAIL_SENDER", f"Auto-Pilot Active: Shooting automated pitch to {to_email} ({biz_name})...", "INFO")
+            success, msg = await send_cold_email(lead)
+            if success:
+                today_sent += 1
+            
+            # Anti-spam natural delay between autonomous emails
+            sim_active = get_setting("simulation_mode", "false").lower() == "true"
+            delay = random.uniform(1.0, 3.0) if sim_active else random.uniform(30.0, 60.0)
+            await asyncio.sleep(delay)
 
 async def run_single_crawler_cycle():
     """Executes one full crawl across active niches, job boards, and dispatches outreach."""
